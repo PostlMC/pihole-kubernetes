@@ -1,4 +1,4 @@
-apiVersion: apps/v1beta2
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ template "pihole.fullname" . }}
@@ -30,13 +30,46 @@ spec:
         - 127.0.0.1
         - 8.8.8.8 
       containers:
-        - env:
+        {{- if .Values.doh.enabled }}
+        - name: cloudflared
+          image: "{{ .Values.doh.repository }}:{{ .Values.doh.tag }}"
+          imagePullPolicy: {{ .Values.doh.pullPolicy }}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          resources:
+            limits:
+              memory: 128Mi
+          ports:
+            - containerPort: 5053
+              name: cloudflared-udp
+              protocol: UDP
+        {{- end }}
+        - name: {{ .Chart.Name }}
+          env:
           - name: WEBPASSWORD
             valueFrom:
               secretKeyRef:
                 key: password
                 name: {{ template "pihole.fullname" . }}-password
-          name: {{ .Chart.Name }}
+          {{- range $key, $value := .Values.extraEnvVars }}
+          - name: {{ $key | quote }}
+            value: {{ $value | quote }}
+          {{- end }}
+          {{- if .Values.doh.enabled }}
+          - name: 'DNS1'
+            value: "127.0.0.1#5053"
+          - name: 'DNS2'
+            value: "127.0.0.1#5053"
+          {{- else }}
+          {{ if .Values.DNS1 }}
+          - name: 'DNS1'
+            value: {{ .Values.DNS1 }}
+          {{ end }}
+          {{ if .Values.DNS2 }}
+          - name: 'DNS2'
+            value: {{ .Values.DNS2 }}
+          {{ end }}
+         {{- end }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
@@ -55,31 +88,47 @@ spec:
           - containerPort: 67
             name: client-udp
             protocol: UDP
-            #          livenessProbe:
-            #            httpGet:
-            #              path: /
-            #              port: http
-            #              initialDelaySeconds: 120
-            #          readinessProbe:
-            #            httpGet:
-            #              path: /
-            #              port: http
-            #              initialDelaySeconds: 120
+          {{- if .Values.probes.liveness.enabled }}
+          livenessProbe:
+            httpGet:
+              path: /admin.index.php
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: /admin.index.php
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+          {{- end }}
           volumeMounts:
           - mountPath: /etc/pihole
             name: config
           - mountPath: /etc/dnsmasq.d/02-custom.conf
             name: custom-dnsmasq
             subPath: 02-custom.conf
+          - mountPath: /etc/addn-hosts
+            name: custom-dnsmasq
+            subPath: addn-hosts
           {{ if .Values.adlists }}
           - mountPath: /etc/pihole/adlists.list
             name: adlists
             subPath: adlists.list
-          {{ end }}          
+          {{ end }}
           {{ if .Values.blacklist }}
           - mountPath: /etc/pihole/blacklist.txt
             name: blacklist
             subPath: blacklist.txt
+          {{ end }}
+          {{ if .Values.regex }}
+          - mountPath: /etc/pihole/regex.list
+            name: regex
+            subPath: regex.list
           {{ end }}
           {{ if .Values.whitelist }}
           - mountPath: /etc/pihole/whitelist.txt
@@ -130,4 +179,11 @@ spec:
           name: {{ template "pihole.fullname" . }}-blacklist
         name: blacklist
       {{ end }}
+      {{ if .Values.regex }}
+      - configMap:
+          defaultMode: 420
+          name: {{ template "pihole.fullname" . }}-regex
+        name: regex
+      {{ end }}
+
 
